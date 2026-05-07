@@ -52,6 +52,27 @@ def build_plot_data(conflict_csv: str, output_csv: str) -> pd.DataFrame:
     for column in conflict_columns:
         data[column] = data[column].fillna(0).astype(int)
 
+    data["unique_conflicts_5km_per_school"] = np.where(
+        data["universities_in_gazetteer"] > 0,
+        data["unique_conflicts_5km"] / data["universities_in_gazetteer"],
+        np.nan,
+    )
+    data["unique_conflicts_10km_per_school"] = np.where(
+        data["universities_in_gazetteer"] > 0,
+        data["unique_conflicts_10km"] / data["universities_in_gazetteer"],
+        np.nan,
+    )
+    data["university_event_exposures_5km_per_school"] = np.where(
+        data["universities_in_gazetteer"] > 0,
+        data["university_event_exposures_5km"] / data["universities_in_gazetteer"],
+        np.nan,
+    )
+    data["university_event_exposures_10km_per_school"] = np.where(
+        data["universities_in_gazetteer"] > 0,
+        data["university_event_exposures_10km"] / data["universities_in_gazetteer"],
+        np.nan,
+    )
+
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
     data.to_csv(output_csv, index=False)
     return data
@@ -62,19 +83,19 @@ def plot(data: pd.DataFrame, output_png: str, title_suffix: str) -> None:
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 7), sharey=True)
     configs = [
-        ("unique_conflicts_5km", "5 km"),
-        ("unique_conflicts_10km", "10 km"),
+        ("unique_conflicts_5km_per_school", "5 km"),
+        ("unique_conflicts_10km_per_school", "10 km"),
     ]
 
-    colors = data["universities_in_gazetteer"].map(lambda n: "#3E7CB1" if n > 0 else "#9B9B9B")
     regression_data = data[data["universities_in_gazetteer"] > 0].copy()
 
     for ax, (x_col, radius_label) in zip(axes, configs):
+        plot_data = data[data[x_col].notna()].copy()
         ax.scatter(
-            data[x_col],
-            data["dropout_rate_pct"],
+            plot_data[x_col],
+            plot_data["dropout_rate_pct"],
             s=95,
-            c=colors,
+            c="#3E7CB1",
             alpha=0.82,
             edgecolor="#2B2B2B",
             linewidth=0.7,
@@ -89,7 +110,7 @@ def plot(data: pd.DataFrame, output_png: str, title_suffix: str) -> None:
             ss_tot = float(np.sum((y - np.mean(y)) ** 2))
             r_squared = 1 - ss_res / ss_tot if ss_tot else np.nan
 
-            line_x = np.linspace(0, max(data[x_col].max(), x.max()) * 1.02, 100)
+            line_x = np.linspace(0, max(plot_data[x_col].max(), x.max()) * 1.02, 100)
             line_y = slope * line_x + intercept
             ax.plot(line_x, line_y, color="#B23A48", linewidth=2.2)
             ax.text(
@@ -108,8 +129,8 @@ def plot(data: pd.DataFrame, output_png: str, title_suffix: str) -> None:
                 },
             )
 
-        for _, row in data.iterrows():
-            x_offset = 2 if row[x_col] < data[x_col].max() * 0.85 else -8
+        for _, row in plot_data.iterrows():
+            x_offset = 2 if row[x_col] < plot_data[x_col].max() * 0.85 else -8
             ha = "left" if x_offset > 0 else "right"
             ax.annotate(
                 row["region"],
@@ -122,7 +143,7 @@ def plot(data: pd.DataFrame, output_png: str, title_suffix: str) -> None:
             )
 
         ax.set_title(f"{radius_label} radius")
-        ax.set_xlabel("Unique conflict events near any university in region")
+        ax.set_xlabel("Unique conflict events per university in region")
         ax.grid(True, linestyle=":", linewidth=0.8, alpha=0.55)
 
     axes[0].set_ylabel("Youth 18-24 not engaged in education/training (%)")
@@ -136,7 +157,7 @@ def plot(data: pd.DataFrame, output_png: str, title_suffix: str) -> None:
         0.5,
         0.02,
         "Dropout proxy: UNDP Figure 12, 'not engaged in education or training'. "
-        "Trend lines exclude grey regions with no universities in the attached gazetteer.",
+        "X-axis divides unique nearby conflict events by schools in the region; regions with zero schools are omitted.",
         ha="center",
         fontsize=9,
         color="#444444",
@@ -153,7 +174,8 @@ def ols_rows(data: pd.DataFrame, window: str) -> list[dict[str, float | int | st
     rows: list[dict[str, float | int | str]] = []
     regression_data = data[data["universities_in_gazetteer"] > 0].copy()
 
-    for radius, x_col in ((5, "unique_conflicts_5km"), (10, "unique_conflicts_10km")):
+    for radius in (5, 10):
+        x_col = f"unique_conflicts_{radius}km_per_school"
         x = regression_data[x_col].to_numpy(dtype=float)
         y = regression_data["dropout_rate_pct"].to_numpy(dtype=float)
         slope, intercept = np.polyfit(x, y, 1)
@@ -168,7 +190,7 @@ def ols_rows(data: pd.DataFrame, window: str) -> list[dict[str, float | int | st
                 "radius_km": radius,
                 "n_regions": len(regression_data),
                 "intercept": intercept,
-                "slope_dropout_pct_points_per_conflict": slope,
+                "slope_dropout_pct_points_per_conflict_per_school": slope,
                 "r_squared": r_squared,
                 "correlation": correlation,
             }
@@ -181,15 +203,15 @@ def main() -> None:
         {
             "window": "2021-2024",
             "conflict_csv": "outputs/undp_region_university_conflict_counts_2021_2024_geoprec_le2_5km_10km_clean.csv",
-            "plot_data_csv": "outputs/dropout_vs_conflicts_plot_data_2021_2024_geoprec_le2.csv",
-            "output_png": "outputs/dropout_vs_conflicts_2021_2024_geoprec_le2.png",
+            "plot_data_csv": "outputs/dropout_vs_conflicts_per_school_plot_data_2021_2024_geoprec_le2.csv",
+            "output_png": "outputs/dropout_vs_conflicts_per_school_2021_2024_geoprec_le2.png",
             "title_suffix": "Conflict data: 2021-2024, UCDP where_prec <= 2",
         },
         {
             "window": "2023-2024",
             "conflict_csv": "outputs/undp_region_university_conflict_counts_2023_2024_geoprec_le2_5km_10km_clean.csv",
-            "plot_data_csv": "outputs/dropout_vs_conflicts_plot_data_2023_2024_geoprec_le2.csv",
-            "output_png": "outputs/dropout_vs_conflicts_2023_2024_geoprec_le2.png",
+            "plot_data_csv": "outputs/dropout_vs_conflicts_per_school_plot_data_2023_2024_geoprec_le2.csv",
+            "output_png": "outputs/dropout_vs_conflicts_per_school_2023_2024_geoprec_le2.png",
             "title_suffix": "Conflict data: 2023-2024, UCDP where_prec <= 2",
         },
     ]
@@ -202,7 +224,7 @@ def main() -> None:
         print(f"Wrote {Path(spec['output_png']).resolve()}")
         print(f"Wrote {Path(spec['plot_data_csv']).resolve()}")
 
-    ols_output = Path("outputs/dropout_conflict_ols_results.csv")
+    ols_output = Path("outputs/dropout_conflict_per_school_ols_results.csv")
     pd.DataFrame(all_ols_rows).to_csv(ols_output, index=False)
     print(f"Wrote {ols_output.resolve()}")
 
